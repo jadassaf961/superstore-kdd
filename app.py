@@ -2,7 +2,7 @@
 Superstore KDD Analytics — DAN614 Individual Project
 ================================================================================
 Author : Jad Assaf
-Course : DAN614 — Data Visualization for Executives
+Course : DAN614 — Advanced Data Visualization
 School : LAU · Adnan Kassar School of Business · MSDA
 
 This single Streamlit application implements the full Knowledge Discovery
@@ -1431,7 +1431,7 @@ It implements the full **Knowledge Discovery in Databases (KDD)** pipeline:
 
 ### Visual design philosophy
 
-Every chart on every page applies the principles taught in DAN614:
+Every chart on every page applies the principles taught in Advanced Data Visualization:
 
 - **One accent color** (LAU green) drawn from preattentive-attribute theory —
   color is precious, and used only where the insight lives.
@@ -1465,7 +1465,7 @@ Every chart on every page applies the principles taught in DAN614:
 <div class="kpi">
   <div class="kpi-label">Course</div>
   <div class="kpi-value" style="font-size:16px;">DAN614</div>
-  <div class="kpi-sub">Data Visualization for Executives</div>
+  <div class="kpi-sub">Advances Data Visualization</div>
 </div>
 """, unsafe_allow_html=True)
         st.write("")
