@@ -227,6 +227,10 @@ def inject_css():
     }
     .stDownloadButton > button:hover { background: #F0F7F4; }
 
+    /* Fix: newer Streamlit renders file uploader button text in two sibling
+       spans — hide the duplicate second span so it shows only once */
+    [data-testid="stFileUploaderDropzone"] button span + span { display: none; }
+
     .stTabs [data-baseweb="tab-list"] {
       gap: 4px; background: #F3F4F6; border-radius: 9px; padding: 4px;
     }
