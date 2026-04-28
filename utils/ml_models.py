@@ -69,6 +69,21 @@ def regression_features(df: pd.DataFrame):
     num = ["Quantity", "Total Revenue"]
     if "Shipping Days" in feats.columns:
         num.append("Shipping Days")
+
+    # ── Engineered features ──────────────────────────────────────────────
+    # Unit price proxy: high-priced items systematically carry different margins
+    feats["Rev_per_unit"] = (
+        feats["Total Revenue"] / feats["Quantity"].clip(lower=1)
+    )
+    num.append("Rev_per_unit")
+
+    # Seasonal signals: discounting and margin vary by quarter / month
+    if "Order Date" in feats.columns:
+        dates = pd.to_datetime(feats["Order Date"], errors="coerce")
+        feats["Order_Month"]   = dates.dt.month.fillna(0).astype(int)
+        feats["Order_Quarter"] = dates.dt.quarter.fillna(0).astype(int)
+        num.extend(["Order_Month", "Order_Quarter"])
+
     cat = [c for c in ML_CATEG if c in feats.columns]
     X = feats[num + cat].copy()
     y = feats["Profit Margin"]
@@ -80,9 +95,10 @@ REGRESSORS = {
     "Random Forest":       lambda n_estimators=100, max_depth=None, **kw:
         RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
                               random_state=42, n_jobs=-1),
-    "Gradient Boosting":   lambda n_estimators=100, max_depth=3, learning_rate=0.1, **kw:
+    "Gradient Boosting":   lambda n_estimators=200, max_depth=4, learning_rate=0.05, **kw:
         GradientBoostingRegressor(n_estimators=n_estimators, max_depth=max_depth,
-                                  learning_rate=learning_rate, random_state=42),
+                                  learning_rate=learning_rate, random_state=42,
+                                  subsample=0.8, min_samples_leaf=5),
 }
 
 
@@ -129,6 +145,19 @@ def classification_features(df: pd.DataFrame):
     num = ["Quantity", "Total Revenue"]
     if "Shipping Days" in feats.columns:
         num.append("Shipping Days")
+
+    # ── Engineered features (mirrors regression_features) ────────────────
+    feats["Rev_per_unit"] = (
+        feats["Total Revenue"] / feats["Quantity"].clip(lower=1)
+    )
+    num.append("Rev_per_unit")
+
+    if "Order Date" in feats.columns:
+        dates = pd.to_datetime(feats["Order Date"], errors="coerce")
+        feats["Order_Month"]   = dates.dt.month.fillna(0).astype(int)
+        feats["Order_Quarter"] = dates.dt.quarter.fillna(0).astype(int)
+        num.extend(["Order_Month", "Order_Quarter"])
+
     cat = [c for c in ML_CATEG if c in feats.columns]
     X = feats[num + cat].copy()
     y = feats["is_unprofitable"]
