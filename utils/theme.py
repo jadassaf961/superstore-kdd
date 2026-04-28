@@ -96,6 +96,11 @@ def inject_css():
       font-family: 'Inter', system-ui, sans-serif !important;
     }
 
+    /* Restore Material Symbols font for Streamlit icons (overridden by rule above) */
+    [data-testid="stIconMaterial"] {
+      font-family: 'Material Symbols Rounded' !important;
+    }
+
     /* Hide Streamlit's default chrome */
     #MainMenu, footer { visibility: hidden; }
     header[data-testid="stHeader"] { background: transparent; }
@@ -226,10 +231,6 @@ def inject_css():
       border: 1px solid #006A4E; border-radius: 8px; padding: 8px 18px;
     }
     .stDownloadButton > button:hover { background: #F0F7F4; }
-
-    /* Fix: newer Streamlit renders file uploader button text in two sibling
-       spans — hide the duplicate second span so it shows only once */
-    [data-testid="stFileUploaderDropzone"] button span + span { display: none; }
 
     .stTabs [data-baseweb="tab-list"] {
       gap: 4px; background: #F3F4F6; border-radius: 9px; padding: 4px;
