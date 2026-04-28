@@ -78,8 +78,13 @@ def sarima_forecast(series: pd.Series, horizon: int = 6,
         mean = fc.predicted_mean
         conf = fc.conf_int(alpha=0.05)
 
+    # Build forecast dates explicitly as month-start to match the historical index
+    forecast_idx = pd.date_range(
+        start=series.index[-1] + pd.offsets.MonthBegin(1),
+        periods=horizon, freq="MS"
+    )
     out = pd.DataFrame({
-        "ds": mean.index,
+        "ds": forecast_idx,
         "yhat": mean.values,
         "yhat_lower": conf.iloc[:, 0].values,
         "yhat_upper": conf.iloc[:, 1].values,
