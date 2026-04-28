@@ -1357,22 +1357,32 @@ def _show_forecast_results(state: dict):
             hoverinfo="skip",
         ))
     if sar is not None:
+        # Anchor point: last historical value so forecast connects to history
+        last_x = series.index[-1]
+        last_y = float(series.values[-1])
+        fc_x = [last_x] + list(sar["ds"])
+        fc_y = [last_y] + list(sar["yhat"])
+        fc_upper = [last_y] + list(sar["yhat_upper"])
+        fc_lower = [last_y] + list(sar["yhat_lower"])
         # Confidence band
         fig.add_trace(go.Scatter(
-            x=list(sar["ds"]) + list(sar["ds"][::-1]),
-            y=list(sar["yhat_upper"]) + list(sar["yhat_lower"][::-1]),
+            x=fc_x + fc_x[::-1],
+            y=fc_upper + fc_lower[::-1],
             fill="toself", fillcolor="rgba(0,106,78,0.10)",
             line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip",
             name="95% CI",
         ))
         fig.add_trace(go.Scatter(
-            x=sar["ds"], y=sar["yhat"], mode="lines+markers",
+            x=fc_x, y=fc_y, mode="lines+markers",
             line=dict(color=LAU_GREEN, width=2.5), name="SARIMA forecast",
             marker=dict(size=7),
             hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>",
         ))
+    # Seasonal naive — also connect from last historical point
+    naive_x = [series.index[-1]] + list(naive["ds"])
+    naive_y = [float(series.values[-1])] + list(naive["yhat"])
     fig.add_trace(go.Scatter(
-        x=naive["ds"], y=naive["yhat"], mode="lines+markers",
+        x=naive_x, y=naive_y, mode="lines+markers",
         line=dict(color=ACCENT_GOLD, width=1.5, dash="dash"),
         marker=dict(size=6, symbol="diamond-open"),
         name="Seasonal naive",
