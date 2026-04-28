@@ -8,9 +8,22 @@ All charts use a SINGLE accent color (LAU green) on a NEUTRAL gray base —
 this implements the preattentive-attribute principle: color is precious,
 use it once, use it where the insight lives.
 """
+import base64
+import os
 import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
+
+
+def _logo_base64() -> str:
+    """Return the LAU logo as a base64 data URI, or empty string if not found."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    logo_path = os.path.join(here, "..", "assets", "lau_logo.jpg")
+    try:
+        with open(logo_path, "rb") as f:
+            return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode()
+    except FileNotFoundError:
+        return ""
 
 # ── Color tokens ────────────────────────────────────────────────────────────
 LAU_GREEN     = "#006A4E"   # primary accent — used SPARINGLY
@@ -259,17 +272,23 @@ def inject_css():
 
 def render_brand_strip(student_name: str = "Jad Assaf"):
     """Top brand strip — LAU + MSDA + course + student."""
+    logo = _logo_base64()
+    logo_html = (
+        f'<img src="{logo}" style="width:42px;height:42px;object-fit:contain;border-radius:6px;" />'
+        if logo else
+        '<div class="brand-mark">L</div>'
+    )
     st.markdown(f"""
     <div class="brand-strip">
       <div class="brand-left">
-        <div class="brand-mark">L</div>
+        {logo_html}
         <div class="brand-text">
           <h1>Superstore KDD Analytics</h1>
           <p>LAU · Adnan Kassar School of Business</p>
         </div>
       </div>
       <div class="brand-right">
-        <div><strong>DAN614</strong> · Data Visualization for Executives</div>
+        <div><strong>DAN614</strong> · Advanced Data Visualization</div>
         <div>MSDA · {student_name}</div>
       </div>
     </div>
