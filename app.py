@@ -1465,7 +1465,7 @@ Every chart on every page applies the principles taught in Advanced Data Visuali
 <div class="kpi">
   <div class="kpi-label">Course</div>
   <div class="kpi-value" style="font-size:16px;">DAN614</div>
-  <div class="kpi-sub">Advances Data Visualization</div>
+  <div class="kpi-sub">Advanced Data Visualization</div>
 </div>
 """, unsafe_allow_html=True)
         st.write("")
