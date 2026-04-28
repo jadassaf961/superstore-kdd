@@ -1,0 +1,23 @@
+# Virtual environment
+.venv/
+
+# Real credentials — never commit these
+credentials.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Data files (remove these lines if you want to include sample data)
+*.xls
+*.xlsx
+*.csv
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
