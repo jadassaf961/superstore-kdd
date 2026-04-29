@@ -55,8 +55,10 @@ from utils.cleaning import (
 from utils.gsheets import load_sheet, list_worksheets, parse_creds_upload
 from utils.ml_models import (
     REGRESSORS, CLASSIFIERS,
+    REGRESSION_TARGETS, CLASSIFICATION_TARGETS,
     train_regressor, train_classifier,
     build_rfm, kmeans_rfm, kmeans_elbow, feature_importance,
+    predict_single, predict_single_proba,
 )
 from utils.forecasting import (
     aggregate_monthly, seasonal_naive_forecast, sarima_forecast, backtest,
@@ -1026,6 +1028,16 @@ def render_geo():
 # ═══════════════════════════════════════════════════════════════════════════
 # PAGE 6 — ML LAB
 # ═══════════════════════════════════════════════════════════════════════════
+def _svm_regressor(model_name: str) -> bool:
+    return model_name == "SVR (RBF kernel)"
+
+def _svm_classifier(model_name: str) -> bool:
+    return model_name == "SVC (RBF kernel)"
+
+def _tree_model(model_name: str) -> bool:
+    return model_name in ("Random Forest", "Gradient Boosting")
+
+
 def render_ml_lab():
     page_title("Machine Learning Lab",
                "Supervised regression, supervised classification, customer segmentation, "
@@ -1035,63 +1047,146 @@ def render_ml_lab():
         df = engineer_date_features(df)
 
     tab_r, tab_c, tab_s, tab_f = st.tabs([
-        "🎯 Profit regression",
-        "🚨 Loss-making classifier",
+        "🎯 Numerical regression",
+        "🚨 Binary classifier",
         "👥 Customer segmentation",
         "📈 Sales forecast",
     ])
 
     # ── Tab R: Regression ──────────────────────────────────────────────────
     with tab_r:
-        section("Predict order-level profit margin",
-                "Three regressors target Profit Margin (= Profit ÷ Revenue), "
-                "evaluated by 5-fold cross-validation. Margin is the more "
-                "actionable target: it normalizes across order sizes and tells "
-                "the business what return to expect per dollar sold.")
+        section("Predict a numerical target per order",
+                "All four models below are suited for **numerical (continuous) prediction**. "
+                "Logistic Regression and other classification-only models are intentionally "
+                "excluded from this tab.")
+
+        # ── Target selector ──────────────────────────────────────────────
+        r_target_label = st.selectbox(
+            "🎯 Target variable",
+            list(REGRESSION_TARGETS.keys()),
+            key="r_target",
+            help="Choose what the model will learn to predict. "
+                 "Profit Margin is bounded and normalises across order sizes; "
+                 "Total Profit gives raw dollar estimates.",
+        )
+        r_target_key = REGRESSION_TARGETS[r_target_label]
+        st.markdown(
+            f'<div class="info-box">Predicting <strong>{r_target_label}</strong> '
+            f'using order features (quantity, revenue, ship mode, segment, region, '
+            f'category, sub-category, shipping days, and engineered date signals).</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Model & hyperparameters ──────────────────────────────────────
         c1, c2, c3 = st.columns(3)
         with c1:
             r_model = st.selectbox("Model", list(REGRESSORS.keys()), key="r_model")
         with c2:
-            r_n_est = st.slider("n_estimators", 20, 300, 100, 20, key="r_ne",
-                                  disabled=r_model == "Linear Regression")
+            if _tree_model(r_model):
+                r_n_est = st.slider("n_estimators", 20, 300, 100, 20, key="r_ne")
+            elif _svm_regressor(r_model):
+                r_C = st.slider("C (regularisation)", 0.01, 10.0, 1.0, 0.01,
+                                key="r_svm_c",
+                                help="Larger C = less regularisation, tighter fit.")
+            else:
+                st.slider("n_estimators", 20, 300, 100, 20, key="r_ne",
+                          disabled=True)
         with c3:
-            r_depth = st.slider("max_depth", 2, 15, 6, 1, key="r_md",
-                                  disabled=r_model == "Linear Regression")
+            if _tree_model(r_model):
+                r_depth = st.slider("max_depth", 2, 15, 6, 1, key="r_md")
+            elif _svm_regressor(r_model):
+                r_eps = st.slider("ε (epsilon)", 0.01, 0.5, 0.1, 0.01, key="r_eps",
+                                  help="Width of the insensitive loss tube around predictions.")
+            else:
+                st.slider("max_depth", 2, 15, 6, 1, key="r_md", disabled=True)
+
+        if _svm_regressor(r_model):
+            st.caption("⚠️ SVR scales as O(n²)–O(n³). On ~10 k rows expect 30–90 s training time.")
 
         if st.button("Train regressor", key="train_r"):
             with st.spinner("Cross-validating and training…"):
-                hp = {} if r_model == "Linear Regression" else {
-                    "n_estimators": r_n_est, "max_depth": r_depth
+                if _tree_model(r_model):
+                    hp = {"n_estimators": r_n_est, "max_depth": r_depth}
+                elif _svm_regressor(r_model):
+                    hp = {"C": r_C, "epsilon": r_eps}
+                else:
+                    hp = {}
+                pipe, m = train_regressor(r_model, df,
+                                          target=r_target_key, hyperparams=hp)
+                st.session_state.ml_results["reg"] = {
+                    "pipe": pipe, "metrics": m,
+                    "model": r_model, "target_label": r_target_label,
                 }
-                pipe, m = train_regressor(r_model, df, hyperparams=hp)
-                st.session_state.ml_results["reg"] = {"pipe": pipe, "metrics": m,
-                                                        "model": r_model}
         if "reg" in st.session_state.ml_results:
             _show_regression_results(st.session_state.ml_results["reg"])
+            _render_prediction_panel(
+                st.session_state.ml_results["reg"], df, mode="reg"
+            )
 
     # ── Tab C: Classifier ──────────────────────────────────────────────────
     with tab_c:
-        section("Predict whether an order will lose money",
-                "Binary target: Total Profit < 0. Three classifiers, 5-fold stratified CV.")
+        section("Predict a binary categorical outcome per order",
+                "All four models below support **binary classification**. "
+                "Linear Regression and other regression-only models are intentionally "
+                "excluded from this tab.")
+
+        # ── Target selector ──────────────────────────────────────────────
+        c_target_label = st.selectbox(
+            "🎯 Target variable",
+            list(CLASSIFICATION_TARGETS.keys()),
+            key="c_target",
+            help="Choose the binary outcome the model will learn to predict.",
+        )
+        c_target_key = CLASSIFICATION_TARGETS[c_target_label]
+        st.markdown(
+            f'<div class="info-box">Predicting <strong>{c_target_label}</strong> '
+            f'(binary 0 / 1) using the same order-level feature set as the regression tab. '
+            f'5-fold stratified cross-validation keeps class balance in every fold.</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Model & hyperparameters ──────────────────────────────────────
         c1, c2, c3 = st.columns(3)
         with c1:
             c_model = st.selectbox("Model", list(CLASSIFIERS.keys()), key="c_model")
         with c2:
-            c_n_est = st.slider("n_estimators", 20, 300, 100, 20, key="c_ne",
-                                  disabled=c_model == "Logistic Regression")
+            if _tree_model(c_model):
+                c_n_est = st.slider("n_estimators", 20, 300, 100, 20, key="c_ne")
+            elif _svm_classifier(c_model):
+                c_C = st.slider("C (regularisation)", 0.01, 10.0, 1.0, 0.01,
+                                key="c_svm_c",
+                                help="Larger C = less regularisation, tighter decision boundary.")
+            else:
+                st.slider("n_estimators", 20, 300, 100, 20, key="c_ne",
+                          disabled=True)
         with c3:
-            c_depth = st.slider("max_depth", 2, 15, 6, 1, key="c_md",
-                                  disabled=c_model == "Logistic Regression")
+            if _tree_model(c_model):
+                c_depth = st.slider("max_depth", 2, 15, 6, 1, key="c_md")
+            else:
+                st.slider("max_depth", 2, 15, 6, 1, key="c_md", disabled=True)
+
+        if _svm_classifier(c_model):
+            st.caption("⚠️ SVC scales as O(n²)–O(n³). On ~10 k rows expect 30–90 s training time.")
+
         if st.button("Train classifier", key="train_c"):
             with st.spinner("Cross-validating and training…"):
-                hp = {} if c_model == "Logistic Regression" else {
-                    "n_estimators": c_n_est, "max_depth": c_depth
+                if _tree_model(c_model):
+                    hp = {"n_estimators": c_n_est, "max_depth": c_depth}
+                elif _svm_classifier(c_model):
+                    hp = {"C": c_C}
+                else:
+                    hp = {}
+                pipe, m = train_classifier(c_model, df,
+                                           target=c_target_key, hyperparams=hp)
+                st.session_state.ml_results["clf"] = {
+                    "pipe": pipe, "metrics": m,
+                    "model": c_model, "target_label": c_target_label,
                 }
-                pipe, m = train_classifier(c_model, df, hyperparams=hp)
-                st.session_state.ml_results["clf"] = {"pipe": pipe, "metrics": m,
-                                                        "model": c_model}
         if "clf" in st.session_state.ml_results:
             _show_classification_results(st.session_state.ml_results["clf"])
+            _render_prediction_panel(
+                st.session_state.ml_results["clf"], df, mode="clf"
+            )
 
     # ── Tab S: Segmentation ────────────────────────────────────────────────
     with tab_s:
@@ -1143,6 +1238,120 @@ def render_ml_lab():
                     }
         if "fc" in st.session_state.ml_results:
             _show_forecast_results(st.session_state.ml_results["fc"])
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Prediction panel — shared by regression and classification tabs
+# ══════════════════════════════════════════════════════════════════════════
+def _render_prediction_panel(state: dict, df: pd.DataFrame, mode: str):
+    """
+    Render an interactive prediction tool below the model results.
+
+    Parameters
+    ----------
+    state : ml_results dict (contains pipe, metrics, target_label)
+    df    : the active dataset (used for dropdown options & sensible defaults)
+    mode  : "reg" or "clf"
+    """
+    m            = state["metrics"]
+    pipe         = state["pipe"]
+    num_cols     = m["num_cols"]
+    cat_cols     = m["cat_cols"]
+    cat_values   = m["cat_values"]
+    num_defaults = m["num_defaults"]
+    target_label = state.get("target_label", m.get("target_col", "target"))
+
+    with st.expander("🔮 Predict on new input", expanded=False):
+        st.markdown(
+            f"Enter values for the order features below and the trained "
+            f"**{state['model']}** will return its prediction for "
+            f"**{target_label}**."
+        )
+
+        # ── Raw numeric inputs (user-visible, excludes engineered cols) ──
+        raw_num = [c for c in num_cols
+                   if c not in ("Rev_per_unit", "Order_Month", "Order_Quarter")]
+
+        input_vals: dict = {}
+
+        # Numeric inputs
+        num_cols_layout = st.columns(max(len(raw_num), 1))
+        for i, col in enumerate(raw_num):
+            default = num_defaults.get(col, 1.0)
+            step    = 1.0 if col == "Quantity" else (10.0 if default > 10 else 1.0)
+            with num_cols_layout[i]:
+                input_vals[col] = st.number_input(
+                    col, value=float(default),
+                    min_value=0.0, step=step,
+                    key=f"pred_{mode}_{col}",
+                )
+
+        # Month selector (derives Order_Month and Order_Quarter)
+        if "Order_Month" in num_cols:
+            pred_month = st.slider(
+                "Order Month (1 = Jan … 12 = Dec)", 1, 12, 6,
+                key=f"pred_{mode}_month",
+            )
+            input_vals["Order_Month"]   = pred_month
+            input_vals["Order_Quarter"] = int((pred_month - 1) // 3 + 1)
+
+        # Derive engineered Rev_per_unit
+        qty = input_vals.get("Quantity", 1.0)
+        rev = input_vals.get("Total Revenue", 0.0)
+        input_vals["Rev_per_unit"] = rev / max(qty, 1.0)
+
+        # Categorical inputs
+        if cat_cols:
+            cat_layout = st.columns(min(len(cat_cols), 3))
+            for i, col in enumerate(cat_cols):
+                opts = cat_values.get(col, ["Unknown"])
+                with cat_layout[i % len(cat_layout)]:
+                    input_vals[col] = st.selectbox(
+                        col, opts, key=f"pred_{mode}_{col}"
+                    )
+
+        # ── Predict ──────────────────────────────────────────────────────
+        if st.button("▶ Get prediction", key=f"btn_pred_{mode}"):
+            try:
+                pred_val = predict_single(pipe, input_vals, num_cols, cat_cols)[0]
+
+                if mode == "reg":
+                    tkey = m.get("target_key", "profit_margin")
+                    if tkey == "profit_margin":
+                        st.success(
+                            f"**Predicted {target_label}:** {pred_val * 100:.2f}%"
+                        )
+                    else:
+                        sign = "+" if pred_val >= 0 else ""
+                        st.success(
+                            f"**Predicted {target_label}:** {sign}${pred_val:,.2f}"
+                        )
+
+                else:  # clf
+                    proba_arr = predict_single_proba(
+                        pipe, input_vals, num_cols, cat_cols
+                    )[0]
+                    pos_prob  = float(proba_arr[1])
+                    neg_prob  = float(proba_arr[0])
+                    label_str = "✅ Positive class" if pred_val == 1 else "❌ Negative class"
+                    tkey = m.get("target_key", "is_unprofitable")
+                    if tkey == "is_unprofitable":
+                        label_str = (
+                            "🔴 Loss-making order" if pred_val == 1
+                            else "🟢 Profitable order"
+                        )
+                    elif tkey == "is_high_revenue":
+                        label_str = (
+                            "🟢 High-revenue order" if pred_val == 1
+                            else "⚪ Standard-revenue order"
+                        )
+                    st.success(
+                        f"**Prediction:** {label_str}  \n"
+                        f"Confidence — positive class: **{pos_prob*100:.1f}%** | "
+                        f"negative class: **{neg_prob*100:.1f}%**"
+                    )
+            except Exception as e:
+                st.error(f"Prediction failed: {e}")
 
 
 def _show_regression_results(state: dict):

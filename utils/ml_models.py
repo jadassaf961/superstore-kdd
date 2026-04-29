@@ -1,15 +1,16 @@
 """
 Machine Learning utilities for the ML Lab page.
 
-Three blocks:
-  1. Supervised REGRESSION — predict Total Profit per order
-       Models: Linear, Random Forest, Gradient Boosting
+Four blocks:
+  1. Supervised REGRESSION — predict a chosen numerical target per order
+       Models: Linear Regression, Random Forest, Gradient Boosting, SVR
        Eval: 5-fold CV (R², MAE, RMSE) + held-out test
-  2. Supervised CLASSIFICATION — predict whether an order will be unprofitable
-       Models: Logistic Regression, Random Forest, Gradient Boosting
+  2. Supervised CLASSIFICATION — predict whether an order meets a binary condition
+       Models: Logistic Regression, Random Forest, Gradient Boosting, SVC
        Eval: 5-fold CV (ROC-AUC, F1) + confusion matrix
   3. Unsupervised CLUSTERING — RFM customer segmentation via K-Means
        Eval: silhouette score, elbow method
+  4. Single-row prediction helper — run a trained pipeline on user-supplied inputs
 """
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.ensemble import (RandomForestRegressor, RandomForestClassifier,
                               GradientBoostingRegressor, GradientBoostingClassifier)
+from sklearn.svm import SVR, SVC
 from sklearn.cluster import KMeans
 from sklearn.metrics import (
     r2_score, mean_absolute_error, mean_squared_error,
@@ -34,6 +36,17 @@ from sklearn.metrics import (
 ML_NUMERIC = ["Quantity", "Total Revenue"]
 ML_CATEG   = ["Ship Mode", "Segment", "Region", "Category", "Sub-Category"]
 
+# ── Target label registries ───────────────────────────────────────────────
+REGRESSION_TARGETS = {
+    "Profit Margin (Profit ÷ Revenue)": "profit_margin",
+    "Total Profit ($)":                 "total_profit",
+}
+
+CLASSIFICATION_TARGETS = {
+    "Unprofitable Order  (Total Profit < 0)":          "is_unprofitable",
+    "High-Revenue Order  (Revenue > dataset median)":  "is_high_revenue",
+}
+
 
 def build_preprocessor(numeric_cols, categorical_cols):
     return ColumnTransformer([
@@ -43,41 +56,53 @@ def build_preprocessor(numeric_cols, categorical_cols):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1. REGRESSION — predict Profit Margin per order
-#
-# Why margin instead of raw profit?
-# Raw profit dollars vary by 4 orders of magnitude (a $20 paper order vs.
-# a $20,000 copier order) and the dominant driver — discount % — is NOT
-# in the dataset. So raw-profit R² is poor and not defensible.
-#
-# Margin (profit / revenue) is bounded, well-behaved, and answers the more
-# useful business question: "What margin should we expect on this order?"
+# 1. REGRESSION — predict a chosen numerical target per order
 # ══════════════════════════════════════════════════════════════════════════
-def regression_features(df: pd.DataFrame):
-    """Predict Profit Margin (= Profit / Revenue) per order."""
-    feats = df.copy()
-    # Compute margin if not already present
-    if "Profit Margin" not in feats.columns:
-        feats["Profit Margin"] = np.where(
-            feats["Total Revenue"].abs() > 1e-9,
-            feats["Total Profit"] / feats["Total Revenue"],
-            0.0,
-        )
-    # Drop rows with extreme/invalid margin so the target is sane
-    feats = feats[feats["Profit Margin"].between(-2.0, 1.0)].reset_index(drop=True)
+def regression_features(df: pd.DataFrame, target: str = "profit_margin"):
+    """
+    Build X / y for regression.
 
+    target options:
+      "profit_margin" — Profit / Revenue (bounded, well-behaved)
+      "total_profit"  — Raw Total Profit ($)
+    """
+    feats = df.copy()
+
+    # ── Compute / validate target ────────────────────────────────────────
+    if target == "profit_margin":
+        if "Profit Margin" not in feats.columns:
+            feats["Profit Margin"] = np.where(
+                feats["Total Revenue"].abs() > 1e-9,
+                feats["Total Profit"] / feats["Total Revenue"],
+                0.0,
+            )
+        feats = feats[feats["Profit Margin"].between(-2.0, 1.0)].reset_index(drop=True)
+        y = feats["Profit Margin"]
+        target_col = "Profit Margin"
+
+    elif target == "total_profit":
+        # Trim extreme outliers (beyond 3 IQR) so the model isn't dominated by a few orders
+        q1, q3 = feats["Total Profit"].quantile([0.25, 0.75])
+        iqr = q3 - q1
+        feats = feats[feats["Total Profit"].between(q1 - 3*iqr, q3 + 3*iqr)].reset_index(drop=True)
+        y = feats["Total Profit"]
+        target_col = "Total Profit"
+
+    else:
+        raise ValueError(f"Unknown regression target: {target}")
+
+    # ── Numeric features ─────────────────────────────────────────────────
     num = ["Quantity", "Total Revenue"]
     if "Shipping Days" in feats.columns:
         num.append("Shipping Days")
 
-    # ── Engineered features ──────────────────────────────────────────────
-    # Unit price proxy: high-priced items systematically carry different margins
+    # Unit price proxy
     feats["Rev_per_unit"] = (
         feats["Total Revenue"] / feats["Quantity"].clip(lower=1)
     )
     num.append("Rev_per_unit")
 
-    # Seasonal signals: discounting and margin vary by quarter / month
+    # Seasonal signals
     if "Order Date" in feats.columns:
         dates = pd.to_datetime(feats["Order Date"], errors="coerce")
         feats["Order_Month"]   = dates.dt.month.fillna(0).astype(int)
@@ -86,34 +111,37 @@ def regression_features(df: pd.DataFrame):
 
     cat = [c for c in ML_CATEG if c in feats.columns]
     X = feats[num + cat].copy()
-    y = feats["Profit Margin"]
-    return X, y, num, cat
+    return X, y, num, cat, target_col
 
 
 REGRESSORS = {
-    "Linear Regression":   lambda **kw: LinearRegression(),
-    "Random Forest":       lambda n_estimators=100, max_depth=None, **kw:
+    "Linear Regression": lambda **kw: LinearRegression(),
+    "Random Forest":     lambda n_estimators=100, max_depth=None, **kw:
         RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
                               random_state=42, n_jobs=-1),
-    "Gradient Boosting":   lambda n_estimators=200, max_depth=4, learning_rate=0.05, **kw:
+    "Gradient Boosting": lambda n_estimators=200, max_depth=4, learning_rate=0.05, **kw:
         GradientBoostingRegressor(n_estimators=n_estimators, max_depth=max_depth,
                                   learning_rate=learning_rate, random_state=42,
                                   subsample=0.8, min_samples_leaf=5),
+    "SVR (RBF kernel)":  lambda C=1.0, epsilon=0.1, **kw:
+        SVR(kernel="rbf", C=C, epsilon=epsilon),
 }
 
 
-def train_regressor(model_name: str, df: pd.DataFrame, hyperparams: dict = None,
+def train_regressor(model_name: str, df: pd.DataFrame,
+                    target: str = "profit_margin",
+                    hyperparams: dict = None,
                     cv_folds: int = 5, test_size: float = 0.2):
     hyperparams = hyperparams or {}
-    X, y, num, cat = regression_features(df)
+    X, y, num, cat, target_col = regression_features(df, target=target)
     pre = build_preprocessor(num, cat)
     estimator = REGRESSORS[model_name](**hyperparams)
     pipe = Pipeline([("pre", pre), ("est", estimator)])
 
     # Cross-validation on full data
     kf = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
-    cv_r2  = cross_val_score(pipe, X, y, cv=kf, scoring="r2", n_jobs=-1)
-    cv_mae = -cross_val_score(pipe, X, y, cv=kf, scoring="neg_mean_absolute_error", n_jobs=-1)
+    cv_r2   = cross_val_score(pipe, X, y, cv=kf, scoring="r2", n_jobs=-1)
+    cv_mae  = -cross_val_score(pipe, X, y, cv=kf, scoring="neg_mean_absolute_error", n_jobs=-1)
     cv_rmse = np.sqrt(-cross_val_score(pipe, X, y, cv=kf, scoring="neg_mean_squared_error", n_jobs=-1))
 
     # Held-out test
@@ -132,21 +160,45 @@ def train_regressor(model_name: str, df: pd.DataFrame, hyperparams: dict = None,
         "y_test":       yte.values,
         "y_pred":       pred,
         "feature_names": _get_feature_names(pipe, num, cat),
+        # ── For prediction panel ──────────────────────────────────────────
+        "num_cols":   num,
+        "cat_cols":   cat,
+        "cat_values": {c: sorted(df[c].dropna().unique().tolist()) for c in cat},
+        "num_defaults": {c: float(df[c].median()) if c in df.columns else 1.0
+                         for c in num},
+        "target_col": target_col,
+        "target_key": target,
     }
     return pipe, metrics
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 2. CLASSIFICATION — predict whether order is unprofitable
+# 2. CLASSIFICATION — predict a binary label per order
 # ══════════════════════════════════════════════════════════════════════════
-def classification_features(df: pd.DataFrame):
+def classification_features(df: pd.DataFrame, target: str = "is_unprofitable"):
+    """
+    Build X / y for binary classification.
+
+    target options:
+      "is_unprofitable" — Total Profit < 0
+      "is_high_revenue" — Total Revenue > dataset median
+    """
     feats = df.copy()
-    feats["is_unprofitable"] = (feats["Total Profit"] < 0).astype(int)
+
+    if target == "is_unprofitable":
+        feats["_target"] = (feats["Total Profit"] < 0).astype(int)
+        target_col = "Unprofitable Order"
+    elif target == "is_high_revenue":
+        med = feats["Total Revenue"].median()
+        feats["_target"] = (feats["Total Revenue"] > med).astype(int)
+        target_col = "High-Revenue Order"
+    else:
+        raise ValueError(f"Unknown classification target: {target}")
+
     num = ["Quantity", "Total Revenue"]
     if "Shipping Days" in feats.columns:
         num.append("Shipping Days")
 
-    # ── Engineered features (mirrors regression_features) ────────────────
     feats["Rev_per_unit"] = (
         feats["Total Revenue"] / feats["Quantity"].clip(lower=1)
     )
@@ -160,8 +212,8 @@ def classification_features(df: pd.DataFrame):
 
     cat = [c for c in ML_CATEG if c in feats.columns]
     X = feats[num + cat].copy()
-    y = feats["is_unprofitable"]
-    return X, y, num, cat
+    y = feats["_target"]
+    return X, y, num, cat, target_col
 
 
 CLASSIFIERS = {
@@ -172,13 +224,17 @@ CLASSIFIERS = {
     "Gradient Boosting":   lambda n_estimators=100, max_depth=3, learning_rate=0.1, **kw:
         GradientBoostingClassifier(n_estimators=n_estimators, max_depth=max_depth,
                                    learning_rate=learning_rate, random_state=42),
+    "SVC (RBF kernel)":    lambda C=1.0, **kw:
+        SVC(kernel="rbf", C=C, probability=True, random_state=42, class_weight="balanced"),
 }
 
 
-def train_classifier(model_name: str, df: pd.DataFrame, hyperparams: dict = None,
+def train_classifier(model_name: str, df: pd.DataFrame,
+                     target: str = "is_unprofitable",
+                     hyperparams: dict = None,
                      cv_folds: int = 5, test_size: float = 0.2):
     hyperparams = hyperparams or {}
-    X, y, num, cat = classification_features(df)
+    X, y, num, cat, target_col = classification_features(df, target=target)
     pre = build_preprocessor(num, cat)
     estimator = CLASSIFIERS[model_name](**hyperparams)
     pipe = Pipeline([("pre", pre), ("est", estimator)])
@@ -194,18 +250,26 @@ def train_classifier(model_name: str, df: pd.DataFrame, hyperparams: dict = None
     pred  = (proba >= 0.5).astype(int)
 
     metrics = {
-        "cv_auc_mean":  float(cv_auc.mean()),
-        "cv_auc_std":   float(cv_auc.std()),
-        "cv_f1_mean":   float(cv_f1.mean()),
-        "test_auc":     float(roc_auc_score(yte, proba)),
-        "test_f1":      float(f1_score(yte, pred)),
-        "test_acc":     float(accuracy_score(yte, pred)),
-        "confusion":    confusion_matrix(yte, pred),
-        "y_test":       yte.values,
-        "y_proba":      proba,
-        "y_pred":       pred,
+        "cv_auc_mean":   float(cv_auc.mean()),
+        "cv_auc_std":    float(cv_auc.std()),
+        "cv_f1_mean":    float(cv_f1.mean()),
+        "test_auc":      float(roc_auc_score(yte, proba)),
+        "test_f1":       float(f1_score(yte, pred)),
+        "test_acc":      float(accuracy_score(yte, pred)),
+        "confusion":     confusion_matrix(yte, pred),
+        "y_test":        yte.values,
+        "y_proba":       proba,
+        "y_pred":        pred,
         "positive_rate": float(y.mean()),
         "feature_names": _get_feature_names(pipe, num, cat),
+        # ── For prediction panel ──────────────────────────────────────────
+        "num_cols":   num,
+        "cat_cols":   cat,
+        "cat_values": {c: sorted(df[c].dropna().unique().tolist()) for c in cat},
+        "num_defaults": {c: float(df[c].median()) if c in df.columns else 1.0
+                         for c in num},
+        "target_col": target_col,
+        "target_key": target,
     }
     return pipe, metrics
 
@@ -216,7 +280,7 @@ def train_classifier(model_name: str, df: pd.DataFrame, hyperparams: dict = None
 def build_rfm(df: pd.DataFrame, snapshot_date: pd.Timestamp = None) -> pd.DataFrame:
     """
     Build RFM (Recency, Frequency, Monetary) features per customer.
-    Recency  = days since last order (smaller = more recent)
+    Recency   = days since last order (smaller = more recent)
     Frequency = number of distinct orders
     Monetary  = total revenue
     """
@@ -226,12 +290,11 @@ def build_rfm(df: pd.DataFrame, snapshot_date: pd.Timestamp = None) -> pd.DataFr
         snapshot_date = df["Order Date"].max() + pd.Timedelta(days=1)
 
     rfm = df.groupby("Customer ID").agg(
-        Recency  =("Order Date",   lambda s: (snapshot_date - s.max()).days),
-        Frequency=("Order ID",     "nunique"),
+        Recency  =("Order Date",    lambda s: (snapshot_date - s.max()).days),
+        Frequency=("Order ID",      "nunique"),
         Monetary =("Total Revenue", "sum"),
     ).reset_index()
 
-    # Bring back name for display
     name_map = df.drop_duplicates("Customer ID").set_index("Customer ID")["Customer Name"]
     rfm["Customer Name"] = rfm["Customer ID"].map(name_map)
     return rfm
@@ -254,7 +317,6 @@ def kmeans_rfm(rfm: pd.DataFrame, k: int = 4, log_transform: bool = True):
     out = rfm.copy()
     out["Cluster"] = labels
 
-    # Label clusters by Monetary value, descending → tier names
     tier_order = (out.groupby("Cluster")["Monetary"].mean()
                      .sort_values(ascending=False).index.tolist())
     tier_names = ["Champions", "Loyal", "Potential", "At-Risk", "Hibernating",
@@ -278,10 +340,40 @@ def kmeans_elbow(rfm: pd.DataFrame, k_range=(2, 9), log_transform: bool = True):
         labels = km.fit_predict(X)
         rows.append({
             "k": k,
-            "inertia": float(km.inertia_),
+            "inertia":    float(km.inertia_),
             "silhouette": float(silhouette_score(X, labels)),
         })
     return pd.DataFrame(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 4. Single-row prediction helper
+# ══════════════════════════════════════════════════════════════════════════
+def predict_single(pipe: Pipeline, input_dict: dict,
+                   num_cols: list, cat_cols: list) -> np.ndarray:
+    """
+    Run a trained pipeline on a single observation.
+
+    Parameters
+    ----------
+    pipe       : fitted sklearn Pipeline
+    input_dict : {feature_name: value} for every feature in num_cols + cat_cols
+    num_cols   : list of numeric column names (same order as training)
+    cat_cols   : list of categorical column names (same order as training)
+
+    Returns
+    -------
+    np.ndarray shape (1,) — predicted value or class label
+    """
+    row = pd.DataFrame([{k: input_dict[k] for k in num_cols + cat_cols}])
+    return pipe.predict(row)
+
+
+def predict_single_proba(pipe: Pipeline, input_dict: dict,
+                          num_cols: list, cat_cols: list) -> np.ndarray:
+    """Same as predict_single but returns class probabilities (classifiers only)."""
+    row = pd.DataFrame([{k: input_dict[k] for k in num_cols + cat_cols}])
+    return pipe.predict_proba(row)
 
 
 # ══════════════════════════════════════════════════════════════════════════
