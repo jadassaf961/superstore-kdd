@@ -407,8 +407,10 @@ def _render_validation_and_preview():
         for msg in rep["value_issues"]:
             st.markdown(f"- {msg}")
 
-    section("Preview · first 10 rows")
-    st.dataframe(df.head(10), use_container_width=True, height=380)
+    section("Data explorer",
+            "Sort any column by clicking its header. Use the search box to filter rows. "
+            "Resize columns by dragging the column dividers.")
+    st.dataframe(df, use_container_width=True, height=500)
 
     if st.session_state.cleaning_log:
         section("Active cleaning operations")
