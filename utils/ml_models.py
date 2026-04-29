@@ -39,7 +39,7 @@ ML_CATEG   = ["Ship Mode", "Segment", "Region", "Category", "Sub-Category"]
 # ── Target label registries ───────────────────────────────────────────────
 REGRESSION_TARGETS = {
     "Profit Margin (Profit ÷ Revenue)": "profit_margin",
-    "Total Profit ($)":                 "total_profit",
+    "Shipping Days (transit time)":     "shipping_days",
 }
 
 CLASSIFICATION_TARGETS = {
@@ -63,8 +63,8 @@ def regression_features(df: pd.DataFrame, target: str = "profit_margin"):
     Build X / y for regression.
 
     target options:
-      "profit_margin" — Profit / Revenue (bounded, well-behaved)
-      "total_profit"  — Raw Total Profit ($)
+      "profit_margin"  — Profit / Revenue (bounded, well-behaved)
+      "shipping_days"  — Days from order to shipment
     """
     feats = df.copy()
 
@@ -80,20 +80,24 @@ def regression_features(df: pd.DataFrame, target: str = "profit_margin"):
         y = feats["Profit Margin"]
         target_col = "Profit Margin"
 
-    elif target == "total_profit":
-        # Trim extreme outliers (beyond 3 IQR) so the model isn't dominated by a few orders
-        q1, q3 = feats["Total Profit"].quantile([0.25, 0.75])
-        iqr = q3 - q1
-        feats = feats[feats["Total Profit"].between(q1 - 3*iqr, q3 + 3*iqr)].reset_index(drop=True)
-        y = feats["Total Profit"]
-        target_col = "Total Profit"
+    elif target == "shipping_days":
+        if "Shipping Days" not in feats.columns:
+            feats["Shipping Days"] = (
+                pd.to_datetime(feats["Ship Date"], errors="coerce") -
+                pd.to_datetime(feats["Order Date"], errors="coerce")
+            ).dt.days
+        feats = feats.dropna(subset=["Shipping Days"])
+        feats = feats[feats["Shipping Days"].between(0, 30)].reset_index(drop=True)
+        y = feats["Shipping Days"].astype(float)
+        target_col = "Shipping Days"
 
     else:
         raise ValueError(f"Unknown regression target: {target}")
 
     # ── Numeric features ─────────────────────────────────────────────────
     num = ["Quantity", "Total Revenue"]
-    if "Shipping Days" in feats.columns:
+    # Never include the target column itself as a feature
+    if target != "shipping_days" and "Shipping Days" in feats.columns:
         num.append("Shipping Days")
 
     # Unit price proxy

@@ -504,14 +504,6 @@ def render_data_cleaning():
         with c3: st.markdown(kpi_card("Upper bound", fmt_money(hi)), unsafe_allow_html=True)
         st.write("")
 
-        # Before/after distribution chart
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Before**")
-            st.plotly_chart(_dist_chart(df[target], target, "Before",
-                                          n_outliers=n_out, lo=lo, hi=hi),
-                              use_container_width=True)
-
         if st.button("Apply outlier handling", key="apply_out"):
             cleaned, log = handle_outliers(df, target, action,
                                             method=method, iqr_mult=mult, z_thresh=z)
@@ -520,10 +512,6 @@ def render_data_cleaning():
                 f"Outliers: `{action}` {n_out} outlier(s) in `{target}` "
                 f"using {method} (bounds {lo:.2f} – {hi:.2f})"
             )
-            with c2:
-                st.markdown("**After**")
-                st.plotly_chart(_dist_chart(cleaned[target], target, "After"),
-                                  use_container_width=True)
             st.success(
                 f"✅ Action **{action}** applied to {n_out:,} outlier(s) in `{target}`."
             )
@@ -1040,47 +1028,63 @@ def _tree_model(model_name: str) -> bool:
 
 def render_ml_lab():
     page_title("Machine Learning Lab",
-               "Supervised regression, supervised classification, customer segmentation, "
-               "and time-series forecasting — each defensible end-to-end.")
+               "Discover hidden patterns in your data. Train models to predict outcomes, "
+               "segment customers, and forecast future sales — no coding required.")
     df = require_data()
     if "Profit Margin" not in df.columns:
         df = engineer_date_features(df)
 
-    tab_r, tab_c, tab_s, tab_f = st.tabs([
-        "🎯 Numerical regression",
-        "🚨 Binary classifier",
+    tab_r, tab_c, tab_s, tab_f, tab_p = st.tabs([
+        "🎯 Regression",
+        "🚨 Classifier",
         "👥 Customer segmentation",
         "📈 Sales forecast",
+        "🔮 Prediction Tool",
     ])
 
     # ── Tab R: Regression ──────────────────────────────────────────────────
     with tab_r:
-        section("Predict a numerical target per order",
-                "All four models below are suited for **numerical (continuous) prediction**. "
-                "Logistic Regression and other classification-only models are intentionally "
-                "excluded from this tab.")
+        section("Predict a number for any order",
+                "Choose **what** you want the model to predict, pick a model, "
+                "and click **Train**. Once trained, jump to the **🔮 Prediction Tool** tab "
+                "to try it on your own order details.")
 
         # ── Target selector ──────────────────────────────────────────────
         r_target_label = st.selectbox(
-            "🎯 Target variable",
+            "🎯 What do you want to predict?",
             list(REGRESSION_TARGETS.keys()),
             key="r_target",
-            help="Choose what the model will learn to predict. "
-                 "Profit Margin is bounded and normalises across order sizes; "
-                 "Total Profit gives raw dollar estimates.",
+            help="Profit Margin: the share of revenue that becomes profit (e.g. 0.20 = 20%). "
+                 "Shipping Days: how many days from order to delivery.",
         )
         r_target_key = REGRESSION_TARGETS[r_target_label]
+        target_desc = {
+            "profit_margin": "the share of order revenue that becomes profit (e.g. 0.20 = 20%). "
+                             "Features: quantity, revenue, ship mode, segment, region, category, "
+                             "sub-category, and order month.",
+            "shipping_days": "the number of days between order placement and shipment. "
+                             "Features: quantity, revenue, ship mode, segment, region, category, "
+                             "sub-category, and order month.",
+        }.get(r_target_key, "")
         st.markdown(
-            f'<div class="info-box">Predicting <strong>{r_target_label}</strong> '
-            f'using order features (quantity, revenue, ship mode, segment, region, '
-            f'category, sub-category, shipping days, and engineered date signals).</div>',
+            f'<div class="info-box">The model will learn to predict '
+            f'<strong>{r_target_label}</strong> — {target_desc}</div>',
             unsafe_allow_html=True,
         )
 
         # ── Model & hyperparameters ──────────────────────────────────────
         c1, c2, c3 = st.columns(3)
         with c1:
-            r_model = st.selectbox("Model", list(REGRESSORS.keys()), key="r_model")
+            r_model = st.selectbox(
+                "Model algorithm",
+                list(REGRESSORS.keys()),
+                index=list(REGRESSORS.keys()).index("SVR (RBF kernel)"),
+                key="r_model",
+                help="Linear Regression: fast baseline. "
+                     "Random Forest: handles complex patterns well. "
+                     "Gradient Boosting: often most accurate. "
+                     "SVR: kernel-based, strong on structured data (slower on 10k+ rows).",
+            )
         with c2:
             if _tree_model(r_model):
                 r_n_est = st.slider("n_estimators", 20, 300, 100, 20, key="r_ne")
@@ -1125,30 +1129,40 @@ def render_ml_lab():
 
     # ── Tab C: Classifier ──────────────────────────────────────────────────
     with tab_c:
-        section("Predict a binary categorical outcome per order",
-                "All four models below support **binary classification**. "
-                "Linear Regression and other regression-only models are intentionally "
-                "excluded from this tab.")
+        section("Answer a yes/no question about any order",
+                "Choose **what question** you want the model to answer, pick a model, "
+                "and click **Train**. Once trained, jump to the **🔮 Prediction Tool** tab "
+                "to try it on your own order details.")
 
         # ── Target selector ──────────────────────────────────────────────
         c_target_label = st.selectbox(
-            "🎯 Target variable",
+            "🎯 What question do you want answered?",
             list(CLASSIFICATION_TARGETS.keys()),
             key="c_target",
-            help="Choose the binary outcome the model will learn to predict.",
+            help="The model will learn to answer this yes/no question for each order.",
         )
         c_target_key = CLASSIFICATION_TARGETS[c_target_label]
         st.markdown(
-            f'<div class="info-box">Predicting <strong>{c_target_label}</strong> '
-            f'(binary 0 / 1) using the same order-level feature set as the regression tab. '
-            f'5-fold stratified cross-validation keeps class balance in every fold.</div>',
+            f'<div class="info-box">The model will answer: <strong>{c_target_label}</strong> '
+            f'(Yes = 1 / No = 0). It learns from order features — quantity, revenue, '
+            f'ship mode, segment, region, category, sub-category, and order month. '
+            f'5-fold cross-validation ensures the results are reliable.</div>',
             unsafe_allow_html=True,
         )
 
         # ── Model & hyperparameters ──────────────────────────────────────
         c1, c2, c3 = st.columns(3)
         with c1:
-            c_model = st.selectbox("Model", list(CLASSIFIERS.keys()), key="c_model")
+            c_model = st.selectbox(
+                "Model algorithm",
+                list(CLASSIFIERS.keys()),
+                index=list(CLASSIFIERS.keys()).index("SVC (RBF kernel)"),
+                key="c_model",
+                help="Logistic Regression: fast, interpretable baseline. "
+                     "Random Forest: handles complex patterns, shows feature importance. "
+                     "Gradient Boosting: often most accurate. "
+                     "SVC: kernel-based, strong on structured data (slower on 10k+ rows).",
+            )
         with c2:
             if _tree_model(c_model):
                 c_n_est = st.slider("n_estimators", 20, 300, 100, 20, key="c_ne")
@@ -1239,6 +1253,10 @@ def render_ml_lab():
         if "fc" in st.session_state.ml_results:
             _show_forecast_results(st.session_state.ml_results["fc"])
 
+    # ── Tab P: Prediction Tool ─────────────────────────────────────────────
+    with tab_p:
+        _render_prediction_tab(df)
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Prediction panel — shared by regression and classification tabs
@@ -1321,11 +1339,13 @@ def _render_prediction_panel(state: dict, df: pd.DataFrame, mode: str):
                         st.success(
                             f"**Predicted {target_label}:** {pred_val * 100:.2f}%"
                         )
-                    else:
-                        sign = "+" if pred_val >= 0 else ""
+                    elif tkey == "shipping_days":
+                        days = max(0, round(pred_val))
                         st.success(
-                            f"**Predicted {target_label}:** {sign}${pred_val:,.2f}"
+                            f"**Predicted {target_label}:** {days} day(s)"
                         )
+                    else:
+                        st.success(f"**Predicted {target_label}:** {pred_val:.4f}")
 
                 else:  # clf
                     proba_arr = predict_single_proba(
@@ -1354,39 +1374,253 @@ def _render_prediction_panel(state: dict, df: pd.DataFrame, mode: str):
                 st.error(f"Prediction failed: {e}")
 
 
+def _render_prediction_tab(df: pd.DataFrame):
+    """Standalone, customer-facing prediction tool tab."""
+    section("Try it yourself",
+            "Describe an order using the form below and a trained model will predict "
+            "its outcome instantly. Train a model first in the Regression or Classifier tabs.")
+
+    has_reg = "reg" in st.session_state.ml_results
+    has_clf = "clf" in st.session_state.ml_results
+
+    if not has_reg and not has_clf:
+        st.markdown(
+            '<div class="info-box">'
+            "<strong>No models trained yet.</strong> Here's how to get started:<br><br>"
+            "<ol>"
+            "<li>Go to the <strong>🎯 Regression</strong> tab to train a model that predicts "
+            "a number (e.g. profit margin or shipping days).</li>"
+            "<li>Or go to the <strong>🚨 Classifier</strong> tab to train a model that answers "
+            "yes/no questions (e.g. will this order lose money?).</li>"
+            "<li>Come back here, fill in your order details, and click <strong>Get prediction</strong>.</li>"
+            "</ol>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── Model selector ────────────────────────────────────────────────────
+    options, keys = [], []
+    if has_reg:
+        reg_state = st.session_state.ml_results["reg"]
+        options.append(
+            f"📊 Regression — predicts '{reg_state['target_label']}' "
+            f"using {reg_state['model']}"
+        )
+        keys.append("reg")
+    if has_clf:
+        clf_state = st.session_state.ml_results["clf"]
+        options.append(
+            f"🔍 Classifier — answers '{clf_state['target_label']}' "
+            f"using {clf_state['model']}"
+        )
+        keys.append("clf")
+
+    if len(options) > 1:
+        chosen_idx = st.radio(
+            "Which model would you like to use?", range(len(options)),
+            format_func=lambda i: options[i], key="pred_tab_choice"
+        )
+        mode = keys[chosen_idx]
+    else:
+        mode = keys[0]
+        st.info(options[0])
+
+    state        = st.session_state.ml_results[mode]
+    m            = state["metrics"]
+    pipe         = state["pipe"]
+    num_cols     = m["num_cols"]
+    cat_cols     = m["cat_cols"]
+    cat_values   = m["cat_values"]
+    num_defaults = m["num_defaults"]
+    target_label = state.get("target_label", m.get("target_col", "target"))
+
+    st.markdown("---")
+    st.markdown("### 📋 Enter your order details")
+
+    raw_num = [c for c in num_cols
+               if c not in ("Rev_per_unit", "Order_Month", "Order_Quarter")]
+
+    input_vals: dict = {}
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown("**📦 Quantities & Revenue**")
+        friendly_num = {
+            "Quantity":      "Quantity (number of items)",
+            "Total Revenue": "Total Revenue ($)",
+            "Shipping Days": "Shipping Days",
+        }
+        for col in raw_num:
+            default = num_defaults.get(col, 1.0)
+            step    = 1.0 if col == "Quantity" else (10.0 if default > 10 else 1.0)
+            input_vals[col] = st.number_input(
+                friendly_num.get(col, col),
+                value=float(default), min_value=0.0, step=step,
+                key=f"predtab_{mode}_{col}",
+            )
+
+        if "Order_Month" in num_cols:
+            month_names = ["January", "February", "March", "April", "May", "June",
+                           "July", "August", "September", "October", "November", "December"]
+            pred_month = st.selectbox(
+                "Order Month",
+                options=list(range(1, 13)),
+                format_func=lambda x: month_names[x - 1],
+                key=f"predtab_{mode}_month",
+            )
+            input_vals["Order_Month"]   = pred_month
+            input_vals["Order_Quarter"] = int((pred_month - 1) // 3 + 1)
+
+    with col_right:
+        st.markdown("**🏷️ Order Categories**")
+        friendly_cat = {
+            "Ship Mode":    "Shipping Speed",
+            "Segment":      "Customer Type",
+            "Region":       "Region",
+            "Category":     "Product Category",
+            "Sub-Category": "Product Sub-Category",
+        }
+        for col in cat_cols:
+            opts = cat_values.get(col, ["Unknown"])
+            input_vals[col] = st.selectbox(
+                friendly_cat.get(col, col), opts,
+                key=f"predtab_{mode}_{col}",
+            )
+
+    # Derive engineered features
+    qty = input_vals.get("Quantity", 1.0)
+    rev = input_vals.get("Total Revenue", 0.0)
+    input_vals["Rev_per_unit"] = rev / max(qty, 1.0)
+
+    st.markdown("")
+    if st.button("▶ Get prediction", key=f"btn_predtab_{mode}"):
+        try:
+            pred_val = predict_single(pipe, input_vals, num_cols, cat_cols)[0]
+            st.markdown("---")
+            st.markdown("### 🎯 Result")
+
+            if mode == "reg":
+                tkey = m.get("target_key", "profit_margin")
+                if tkey == "profit_margin":
+                    pct = pred_val * 100
+                    if pct >= 20:
+                        icon, comment = "🟢", "Strong margin — this order is likely quite profitable."
+                    elif pct >= 5:
+                        icon, comment = "🟡", "Moderate margin — acceptable but room for improvement."
+                    elif pct >= 0:
+                        icon, comment = "🟠", "Thin margin — this order barely covers its costs."
+                    else:
+                        icon, comment = "🔴", "Negative margin — this order is predicted to lose money."
+                    st.success(f"{icon} **Predicted Profit Margin: {pct:.1f}%**\n\n{comment}")
+                elif tkey == "shipping_days":
+                    days = max(0, round(pred_val))
+                    if days <= 2:
+                        comment = "Very fast delivery expected."
+                    elif days <= 4:
+                        comment = "Standard delivery time."
+                    else:
+                        comment = "Longer than average — consider an expedited ship mode."
+                    st.success(f"📦 **Predicted Shipping Time: {days} day(s)**\n\n{comment}")
+                else:
+                    st.success(f"**Predicted {target_label}:** {pred_val:.4f}")
+
+            else:  # clf
+                proba_arr = predict_single_proba(pipe, input_vals, num_cols, cat_cols)[0]
+                pos_prob  = float(proba_arr[1])
+                neg_prob  = float(proba_arr[0])
+                pred_cls  = int(pred_val)
+                tkey      = m.get("target_key", "is_unprofitable")
+
+                if tkey == "is_unprofitable":
+                    if pred_cls == 1:
+                        st.error(
+                            f"🔴 **This order is predicted to LOSE MONEY**\n\n"
+                            f"The model is **{pos_prob*100:.1f}%** confident it will be unprofitable. "
+                            f"Consider reviewing pricing, discounts, or shipping costs."
+                        )
+                    else:
+                        st.success(
+                            f"🟢 **This order is predicted to be PROFITABLE**\n\n"
+                            f"Confidence: **{neg_prob*100:.1f}%** profitable. "
+                            f"Loss probability: {pos_prob*100:.1f}%."
+                        )
+                elif tkey == "is_high_revenue":
+                    if pred_cls == 1:
+                        st.success(
+                            f"🟢 **This looks like a HIGH-REVENUE order**\n\n"
+                            f"Confidence: **{pos_prob*100:.1f}%**."
+                        )
+                    else:
+                        st.info(
+                            f"⚪ **This looks like a standard-revenue order**\n\n"
+                            f"Confidence: **{neg_prob*100:.1f}%**."
+                        )
+                else:
+                    label_str = "✅ Yes" if pred_cls == 1 else "❌ No"
+                    st.success(
+                        f"**{target_label}:** {label_str}  \n"
+                        f"Confidence — Yes: **{pos_prob*100:.1f}%** | No: **{neg_prob*100:.1f}%**"
+                    )
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")
+
+
 def _show_regression_results(state: dict):
-    m = state["metrics"]
+    m    = state["metrics"]
+    tkey = m.get("target_key", "profit_margin")
+    tcol = m.get("target_col", "Target")
+
+    if tkey == "profit_margin":
+        mae_fmt   = f"{m['cv_mae_mean']*100:.2f} pp"
+        mae_sub   = "margin points"
+        rmse_fmt  = f"{m['test_rmse']*100:.2f} pp"
+        rmse_sub  = "margin points"
+        y_test_sc = m["y_test"] * 100
+        y_pred_sc = m["y_pred"] * 100
+        hover_t   = "Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>"
+        x_label   = "Actual margin (%)"
+        y_label   = "Predicted margin (%)"
+    else:  # shipping_days or future numeric targets
+        mae_fmt   = f"{m['cv_mae_mean']:.2f}"
+        mae_sub   = "days"
+        rmse_fmt  = f"{m['test_rmse']:.2f}"
+        rmse_sub  = "days"
+        y_test_sc = m["y_test"]
+        y_pred_sc = m["y_pred"]
+        hover_t   = f"Actual: %{{x:.1f}}<br>Predicted: %{{y:.1f}}<extra></extra>"
+        x_label   = f"Actual {tcol}"
+        y_label   = f"Predicted {tcol}"
+
     c = st.columns(4)
     with c[0]: st.markdown(kpi_card("CV R² (mean)", f"{m['cv_r2_mean']:.3f}",
                                        sub=f"± {m['cv_r2_std']:.3f}", accent=True),
                               unsafe_allow_html=True)
-    with c[1]: st.markdown(kpi_card("CV MAE", f"{m['cv_mae_mean']*100:.2f} pp",
-                                       sub="margin points"),
+    with c[1]: st.markdown(kpi_card("CV MAE", mae_fmt, sub=mae_sub),
                               unsafe_allow_html=True)
     with c[2]: st.markdown(kpi_card("Test R²", f"{m['test_r2']:.3f}"),
                               unsafe_allow_html=True)
-    with c[3]: st.markdown(kpi_card("Test RMSE", f"{m['test_rmse']*100:.2f} pp",
-                                       sub="margin points"),
+    with c[3]: st.markdown(kpi_card("Test RMSE", rmse_fmt, sub=rmse_sub),
                               unsafe_allow_html=True)
     st.write("")
 
     cl, cr = st.columns(2)
     with cl:
-        section("Predicted vs. actual margin")
+        section(f"Predicted vs. actual {tcol.lower()}")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=m["y_test"]*100, y=m["y_pred"]*100, mode="markers",
+            x=y_test_sc, y=y_pred_sc, mode="markers",
             marker=dict(color=LAU_GREEN, size=5, opacity=0.5),
-            hovertemplate="Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>",
+            hovertemplate=hover_t,
             name="Order",
         ))
-        lo = min(m["y_test"].min(), m["y_pred"].min())*100
-        hi = max(m["y_test"].max(), m["y_pred"].max())*100
+        lo = float(min(y_test_sc.min(), y_pred_sc.min()))
+        hi = float(max(y_test_sc.max(), y_pred_sc.max()))
         fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines",
                                    line=dict(color=GRAY_500, width=1, dash="dash"),
                                    showlegend=False, hoverinfo="skip"))
-        fig.update_layout(height=340, xaxis_title="Actual margin (%)",
-                            yaxis_title="Predicted margin (%)", showlegend=False)
+        fig.update_layout(height=340, xaxis_title=x_label,
+                            yaxis_title=y_label, showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with cr:
