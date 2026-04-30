@@ -1207,9 +1207,6 @@ def render_ml_lab():
         if "fc" in st.session_state.ml_results:
             _show_forecast_results(st.session_state.ml_results["fc"])
 
-    # ── Tab P: Prediction Tool ─────────────────────────────────────────────
-    with tab_p:
-        _render_prediction_tab(df)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1328,11 +1325,10 @@ def _render_prediction_panel(state: dict, df: pd.DataFrame, mode: str):
                 st.error(f"Prediction failed: {e}")
 
 
-def _render_prediction_tab(df: pd.DataFrame):
-    """Standalone, customer-facing prediction tool tab."""
-    section("Try it yourself",
-            "Describe an order using the form below and a trained model will predict "
-            "its outcome instantly. Train a model first in the Regression or Classifier tabs.")
+def _render_prediction_tab_UNUSED(df: pd.DataFrame):
+    """Replaced by inline 🔮 expanders inside each classifier tab."""
+    pass
+    # kept as stub to avoid deleting too aggressively; not called anywhere
 
     has_reg = "reg" in st.session_state.ml_results
     has_clf = "clf" in st.session_state.ml_results
