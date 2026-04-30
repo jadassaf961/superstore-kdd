@@ -132,21 +132,34 @@ REGRESSORS = {
 }
 
 
+SVM_MAX_ROWS = 2_000   # hard cap to keep cloud instances alive
+
+
 def train_regressor(model_name: str, df: pd.DataFrame,
                     target: str = "profit_margin",
                     hyperparams: dict = None,
                     cv_folds: int = 5, test_size: float = 0.2):
     hyperparams = hyperparams or {}
     X, y, num, cat, target_col = regression_features(df, target=target)
+
+    # SVM is O(n²–n³): subsample + reduce folds + run sequentially
+    is_svm = model_name == "SVR (RBF kernel)"
+    if is_svm and len(X) > SVM_MAX_ROWS:
+        idx = np.random.default_rng(42).choice(len(X), SVM_MAX_ROWS, replace=False)
+        X = X.iloc[idx].reset_index(drop=True)
+        y = y.iloc[idx].reset_index(drop=True)
+        cv_folds = 3
+    cv_jobs = 1 if is_svm else -1
+
     pre = build_preprocessor(num, cat)
     estimator = REGRESSORS[model_name](**hyperparams)
     pipe = Pipeline([("pre", pre), ("est", estimator)])
 
     # Cross-validation on full data
     kf = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
-    cv_r2   = cross_val_score(pipe, X, y, cv=kf, scoring="r2", n_jobs=-1)
-    cv_mae  = -cross_val_score(pipe, X, y, cv=kf, scoring="neg_mean_absolute_error", n_jobs=-1)
-    cv_rmse = np.sqrt(-cross_val_score(pipe, X, y, cv=kf, scoring="neg_mean_squared_error", n_jobs=-1))
+    cv_r2   = cross_val_score(pipe, X, y, cv=kf, scoring="r2", n_jobs=cv_jobs)
+    cv_mae  = -cross_val_score(pipe, X, y, cv=kf, scoring="neg_mean_absolute_error", n_jobs=cv_jobs)
+    cv_rmse = np.sqrt(-cross_val_score(pipe, X, y, cv=kf, scoring="neg_mean_squared_error", n_jobs=cv_jobs))
 
     # Held-out test
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size, random_state=42)
@@ -239,13 +252,26 @@ def train_classifier(model_name: str, df: pd.DataFrame,
                      cv_folds: int = 5, test_size: float = 0.2):
     hyperparams = hyperparams or {}
     X, y, num, cat, target_col = classification_features(df, target=target)
+
+    # SVM is O(n²–n³): subsample + reduce folds + run sequentially
+    is_svm = model_name == "SVC (RBF kernel)"
+    if is_svm and len(X) > SVM_MAX_ROWS:
+        # Stratified subsample to keep class balance
+        from sklearn.model_selection import StratifiedShuffleSplit
+        sss = StratifiedShuffleSplit(n_splits=1, train_size=SVM_MAX_ROWS, random_state=42)
+        idx, _ = next(sss.split(X, y))
+        X = X.iloc[idx].reset_index(drop=True)
+        y = y.iloc[idx].reset_index(drop=True)
+        cv_folds = 3
+    cv_jobs = 1 if is_svm else -1
+
     pre = build_preprocessor(num, cat)
     estimator = CLASSIFIERS[model_name](**hyperparams)
     pipe = Pipeline([("pre", pre), ("est", estimator)])
 
     skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
-    cv_auc = cross_val_score(pipe, X, y, cv=skf, scoring="roc_auc", n_jobs=-1)
-    cv_f1  = cross_val_score(pipe, X, y, cv=skf, scoring="f1", n_jobs=-1)
+    cv_auc = cross_val_score(pipe, X, y, cv=skf, scoring="roc_auc", n_jobs=cv_jobs)
+    cv_f1  = cross_val_score(pipe, X, y, cv=skf, scoring="f1", n_jobs=cv_jobs)
 
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=test_size,
                                            stratify=y, random_state=42)

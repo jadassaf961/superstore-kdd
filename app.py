@@ -1107,7 +1107,7 @@ def render_ml_lab():
                 st.slider("max_depth", 2, 15, 6, 1, key="r_md", disabled=True)
 
         if _svm_regressor(r_model):
-            st.caption("⚠️ SVR scales as O(n²)–O(n³). On ~10 k rows expect 30–90 s training time.")
+            st.caption("ℹ️ SVR is automatically capped at 2,000 rows (stratified sample) and uses 3-fold CV to keep cloud training times under ~20 s.")
 
         if st.button("Train regressor", key="train_r"):
             with st.spinner("Cross-validating and training…"):
@@ -1182,7 +1182,7 @@ def render_ml_lab():
                 st.slider("max_depth", 2, 15, 6, 1, key="c_md", disabled=True)
 
         if _svm_classifier(c_model):
-            st.caption("⚠️ SVC scales as O(n²)–O(n³). On ~10 k rows expect 30–90 s training time.")
+            st.caption("ℹ️ SVC is automatically capped at 2,000 rows (stratified sample) and uses 3-fold CV to keep cloud training times under ~20 s.")
 
         if st.button("Train classifier", key="train_c"):
             with st.spinner("Cross-validating and training…"):
