@@ -54,9 +54,9 @@ from utils.cleaning import (
 )
 from utils.gsheets import load_sheet, list_worksheets, parse_creds_upload
 from utils.ml_models import (
-    REGRESSORS, CLASSIFIERS,
-    REGRESSION_TARGETS, CLASSIFICATION_TARGETS,
-    train_regressor, train_classifier,
+    CLASSIFIERS,
+    MULTICLASS_TARGETS, CLASSIFICATION_TARGETS,
+    train_multiclass, train_classifier,
     build_rfm, kmeans_rfm, kmeans_elbow, feature_importance,
     predict_single, predict_single_proba,
 )
@@ -1018,186 +1018,138 @@ def render_geo():
 # ═══════════════════════════════════════════════════════════════════════════
 # PAGE 6 — ML LAB
 # ═══════════════════════════════════════════════════════════════════════════
-def _svm_regressor(model_name: str) -> bool:
-    return model_name == "SVR (RBF kernel)"
-
-def _svm_classifier(model_name: str) -> bool:
+def _svm_model(model_name: str) -> bool:
     return model_name == "SVC (RBF kernel)"
 
 def _tree_model(model_name: str) -> bool:
     return model_name in ("Random Forest", "Gradient Boosting")
 
 
+def _classifier_hyperparam_ui(prefix: str, model_name: str) -> dict:
+    """Render model hyperparameter widgets. Returns hp dict."""
+    c2, c3 = st.columns(2)
+    hp = {}
+    with c2:
+        if _tree_model(model_name):
+            hp["n_estimators"] = st.slider(
+                "n_estimators", 20, 300, 100, 20, key=f"{prefix}_ne")
+        elif _svm_model(model_name):
+            hp["C"] = st.slider(
+                "C (regularisation)", 0.01, 10.0, 1.0, 0.01,
+                key=f"{prefix}_c",
+                help="Larger C = less regularisation, tighter decision boundary.")
+        else:
+            st.slider("n_estimators", 20, 300, 100, 20,
+                      key=f"{prefix}_ne", disabled=True)
+    with c3:
+        if _tree_model(model_name):
+            hp["max_depth"] = st.slider(
+                "max_depth", 2, 15, 6, 1, key=f"{prefix}_md")
+        else:
+            st.slider("max_depth", 2, 15, 6, 1,
+                      key=f"{prefix}_md", disabled=True)
+    if _svm_model(model_name):
+        st.caption("ℹ️ SVC is automatically capped at 2,000 rows and uses "
+                   "3-fold CV to stay within Streamlit Cloud limits (~20 s).")
+    return hp
+
+
 def render_ml_lab():
     page_title("Machine Learning Lab",
-               "Discover hidden patterns in your data. Train models to predict outcomes, "
-               "segment customers, and forecast future sales — no coding required.")
+               "Two supervised classifiers (multi-class & binary), customer segmentation, "
+               "and time-series forecasting — each defensible end-to-end.")
     df = require_data()
     if "Profit Margin" not in df.columns:
         df = engineer_date_features(df)
 
-    tab_r, tab_c, tab_s, tab_f, tab_p = st.tabs([
-        "🎯 Regression",
-        "🚨 Classifier",
+    tab_mc, tab_c, tab_s, tab_f = st.tabs([
+        "📊 Profit-tier classifier",
+        "🚨 Binary classifier",
         "👥 Customer segmentation",
         "📈 Sales forecast",
-        "🔮 Prediction Tool",
     ])
 
-    # ── Tab R: Regression ──────────────────────────────────────────────────
-    with tab_r:
-        section("Predict a number for any order",
-                "Choose **what** you want the model to predict, pick a model, "
-                "and click **Train**. Once trained, jump to the **🔮 Prediction Tool** tab "
-                "to try it on your own order details.")
+    # ── Tab MC: Multi-class classifier ─────────────────────────────────────
+    with tab_mc:
+        section("Predict a categorical profit / revenue tier per order",
+                "Both targets produce a **3-class categorical label**. "
+                "All four models are classifiers — evaluated with macro F1 "
+                "(treats every class equally) via 5-fold stratified CV.")
 
-        # ── Target selector ──────────────────────────────────────────────
-        r_target_label = st.selectbox(
-            "🎯 What do you want to predict?",
-            list(REGRESSION_TARGETS.keys()),
-            key="r_target",
-            help="Profit Margin: the share of revenue that becomes profit (e.g. 0.20 = 20%). "
-                 "Shipping Days: how many days from order to delivery.",
+        mc_target_label = st.selectbox(
+            "🎯 Target variable",
+            list(MULTICLASS_TARGETS.keys()),
+            key="mc_target",
+            help="Profit-Margin Tier bins orders into Loss / Low / High margin. "
+                 "Order-Value Tier bins by revenue tertile (Small / Medium / Large).",
         )
-        r_target_key = REGRESSION_TARGETS[r_target_label]
-        target_desc = {
-            "profit_margin": "the share of order revenue that becomes profit (e.g. 0.20 = 20%). "
-                             "Features: quantity, revenue, ship mode, segment, region, category, "
-                             "sub-category, and order month.",
-            "shipping_days": "the number of days between order placement and shipment. "
-                             "Features: quantity, revenue, ship mode, segment, region, category, "
-                             "sub-category, and order month.",
-        }.get(r_target_key, "")
+        mc_target_key = MULTICLASS_TARGETS[mc_target_label]
+
+        tier_desc = (
+            "Loss (margin < 0%) · Low Margin (0 – 15%) · High Margin (> 15%)"
+            if mc_target_key == "margin_tier"
+            else "Small / Medium / Large — based on revenue tertiles of the loaded dataset"
+        )
         st.markdown(
-            f'<div class="info-box">The model will learn to predict '
-            f'<strong>{r_target_label}</strong> — {target_desc}</div>',
+            f'<div class="info-box">Predicting <strong>{mc_target_label}</strong>. '
+            f'Classes: <em>{tier_desc}</em>.</div>',
             unsafe_allow_html=True,
         )
 
-        # ── Model & hyperparameters ──────────────────────────────────────
-        c1, c2, c3 = st.columns(3)
+        c1, *_ = st.columns([1, 2])
         with c1:
-            r_model = st.selectbox(
-                "Model algorithm",
-                list(REGRESSORS.keys()),
-                index=list(REGRESSORS.keys()).index("SVR (RBF kernel)"),
-                key="r_model",
-                help="Linear Regression: fast baseline. "
-                     "Random Forest: handles complex patterns well. "
-                     "Gradient Boosting: often most accurate. "
-                     "SVR: kernel-based, strong on structured data (slower on 10k+ rows).",
-            )
-        with c2:
-            if _tree_model(r_model):
-                r_n_est = st.slider("n_estimators", 20, 300, 100, 20, key="r_ne")
-            elif _svm_regressor(r_model):
-                r_C = st.slider("C (regularisation)", 0.01, 10.0, 1.0, 0.01,
-                                key="r_svm_c",
-                                help="Larger C = less regularisation, tighter fit.")
-            else:
-                st.slider("n_estimators", 20, 300, 100, 20, key="r_ne",
-                          disabled=True)
-        with c3:
-            if _tree_model(r_model):
-                r_depth = st.slider("max_depth", 2, 15, 6, 1, key="r_md")
-            elif _svm_regressor(r_model):
-                r_eps = st.slider("ε (epsilon)", 0.01, 0.5, 0.1, 0.01, key="r_eps",
-                                  help="Width of the insensitive loss tube around predictions.")
-            else:
-                st.slider("max_depth", 2, 15, 6, 1, key="r_md", disabled=True)
+            mc_model = st.selectbox("Model", list(CLASSIFIERS.keys()), key="mc_model")
+        mc_hp = _classifier_hyperparam_ui("mc", mc_model)
 
-        if _svm_regressor(r_model):
-            st.caption("ℹ️ SVR is automatically capped at 2,000 rows (stratified sample) and uses 3-fold CV to keep cloud training times under ~20 s.")
-
-        if st.button("Train regressor", key="train_r"):
+        if st.button("Train multi-class classifier", key="train_mc"):
             with st.spinner("Cross-validating and training…"):
-                if _tree_model(r_model):
-                    hp = {"n_estimators": r_n_est, "max_depth": r_depth}
-                elif _svm_regressor(r_model):
-                    hp = {"C": r_C, "epsilon": r_eps}
-                else:
-                    hp = {}
-                pipe, m = train_regressor(r_model, df,
-                                          target=r_target_key, hyperparams=hp)
-                st.session_state.ml_results["reg"] = {
+                pipe, m = train_multiclass(mc_model, df,
+                                           target=mc_target_key, hyperparams=mc_hp)
+                st.session_state.ml_results["mc"] = {
                     "pipe": pipe, "metrics": m,
-                    "model": r_model, "target_label": r_target_label,
+                    "model": mc_model, "target_label": mc_target_label,
                 }
-        if "reg" in st.session_state.ml_results:
-            _show_regression_results(st.session_state.ml_results["reg"])
+
+        if "mc" in st.session_state.ml_results:
+            _show_multiclass_results(st.session_state.ml_results["mc"])
             _render_prediction_panel(
-                st.session_state.ml_results["reg"], df, mode="reg"
+                st.session_state.ml_results["mc"], df, mode="mc"
             )
 
-    # ── Tab C: Classifier ──────────────────────────────────────────────────
+    # ── Tab C: Binary classifier ────────────────────────────────────────────
     with tab_c:
-        section("Answer a yes/no question about any order",
-                "Choose **what question** you want the model to answer, pick a model, "
-                "and click **Train**. Once trained, jump to the **🔮 Prediction Tool** tab "
-                "to try it on your own order details.")
+        section("Predict a binary categorical outcome per order",
+                "Binary target (0 / 1). All four models are classifiers. "
+                "5-fold stratified CV keeps class balance in every fold.")
 
-        # ── Target selector ──────────────────────────────────────────────
         c_target_label = st.selectbox(
-            "🎯 What question do you want answered?",
+            "🎯 Target variable",
             list(CLASSIFICATION_TARGETS.keys()),
             key="c_target",
-            help="The model will learn to answer this yes/no question for each order.",
+            help="Choose the binary outcome the model will learn to predict.",
         )
         c_target_key = CLASSIFICATION_TARGETS[c_target_label]
         st.markdown(
-            f'<div class="info-box">The model will answer: <strong>{c_target_label}</strong> '
-            f'(Yes = 1 / No = 0). It learns from order features — quantity, revenue, '
-            f'ship mode, segment, region, category, sub-category, and order month. '
-            f'5-fold cross-validation ensures the results are reliable.</div>',
+            f'<div class="info-box">Predicting <strong>{c_target_label}</strong> '
+            f'(binary 0 / 1). Features: quantity, revenue, ship mode, segment, region, '
+            f'category, sub-category, shipping days, and engineered date signals.</div>',
             unsafe_allow_html=True,
         )
 
-        # ── Model & hyperparameters ──────────────────────────────────────
-        c1, c2, c3 = st.columns(3)
+        c1, *_ = st.columns([1, 2])
         with c1:
-            c_model = st.selectbox(
-                "Model algorithm",
-                list(CLASSIFIERS.keys()),
-                index=list(CLASSIFIERS.keys()).index("SVC (RBF kernel)"),
-                key="c_model",
-                help="Logistic Regression: fast, interpretable baseline. "
-                     "Random Forest: handles complex patterns, shows feature importance. "
-                     "Gradient Boosting: often most accurate. "
-                     "SVC: kernel-based, strong on structured data (slower on 10k+ rows).",
-            )
-        with c2:
-            if _tree_model(c_model):
-                c_n_est = st.slider("n_estimators", 20, 300, 100, 20, key="c_ne")
-            elif _svm_classifier(c_model):
-                c_C = st.slider("C (regularisation)", 0.01, 10.0, 1.0, 0.01,
-                                key="c_svm_c",
-                                help="Larger C = less regularisation, tighter decision boundary.")
-            else:
-                st.slider("n_estimators", 20, 300, 100, 20, key="c_ne",
-                          disabled=True)
-        with c3:
-            if _tree_model(c_model):
-                c_depth = st.slider("max_depth", 2, 15, 6, 1, key="c_md")
-            else:
-                st.slider("max_depth", 2, 15, 6, 1, key="c_md", disabled=True)
+            c_model = st.selectbox("Model", list(CLASSIFIERS.keys()), key="c_model")
+        c_hp = _classifier_hyperparam_ui("c", c_model)
 
-        if _svm_classifier(c_model):
-            st.caption("ℹ️ SVC is automatically capped at 2,000 rows (stratified sample) and uses 3-fold CV to keep cloud training times under ~20 s.")
-
-        if st.button("Train classifier", key="train_c"):
+        if st.button("Train binary classifier", key="train_c"):
             with st.spinner("Cross-validating and training…"):
-                if _tree_model(c_model):
-                    hp = {"n_estimators": c_n_est, "max_depth": c_depth}
-                elif _svm_classifier(c_model):
-                    hp = {"C": c_C}
-                else:
-                    hp = {}
                 pipe, m = train_classifier(c_model, df,
-                                           target=c_target_key, hyperparams=hp)
+                                           target=c_target_key, hyperparams=c_hp)
                 st.session_state.ml_results["clf"] = {
                     "pipe": pipe, "metrics": m,
                     "model": c_model, "target_label": c_target_label,
                 }
+
         if "clf" in st.session_state.ml_results:
             _show_classification_results(st.session_state.ml_results["clf"])
             _render_prediction_panel(
@@ -1502,32 +1454,39 @@ def _render_prediction_tab(df: pd.DataFrame):
             st.markdown("---")
             st.markdown("### 🎯 Result")
 
-            if mode == "reg":
-                tkey = m.get("target_key", "profit_margin")
-                if tkey == "profit_margin":
-                    pct = pred_val * 100
-                    if pct >= 20:
-                        icon, comment = "🟢", "Strong margin — this order is likely quite profitable."
-                    elif pct >= 5:
-                        icon, comment = "🟡", "Moderate margin — acceptable but room for improvement."
-                    elif pct >= 0:
-                        icon, comment = "🟠", "Thin margin — this order barely covers its costs."
-                    else:
-                        icon, comment = "🔴", "Negative margin — this order is predicted to lose money."
-                    st.success(f"{icon} **Predicted Profit Margin: {pct:.1f}%**\n\n{comment}")
-                elif tkey == "shipping_days":
-                    days = max(0, round(pred_val))
-                    if days <= 2:
-                        comment = "Very fast delivery expected."
-                    elif days <= 4:
-                        comment = "Standard delivery time."
-                    else:
-                        comment = "Longer than average — consider an expedited ship mode."
-                    st.success(f"📦 **Predicted Shipping Time: {days} day(s)**\n\n{comment}")
-                else:
-                    st.success(f"**Predicted {target_label}:** {pred_val:.4f}")
+            if mode == "mc":
+                # Multi-class: show predicted tier + probability bar per class
+                proba_arr = predict_single_proba(pipe, input_vals, num_cols, cat_cols)[0]
+                classes   = m.get("classes", [])
+                tkey      = m.get("target_key", "margin_tier")
+                icons     = {"Loss": "🔴", "Low Margin": "🟡", "High Margin": "🟢",
+                             "Small": "⚪", "Medium": "🟡", "Large": "🟢"}
+                icon      = icons.get(str(pred_val), "📊")
+                best_prob = float(max(proba_arr))
+                st.success(
+                    f"{icon} **Predicted tier: {pred_val}** "
+                    f"(model confidence: {best_prob*100:.1f}%)"
+                )
+                if classes:
+                    prob_df = pd.DataFrame({
+                        "Class": classes,
+                        "Probability (%)": [p * 100 for p in proba_arr],
+                    })
+                    fig_p = go.Figure(go.Bar(
+                        x=prob_df["Class"],
+                        y=prob_df["Probability (%)"],
+                        marker_color=[LAU_GREEN if c == str(pred_val) else GRAY_300
+                                      for c in classes],
+                        text=[f"{p:.1f}%" for p in prob_df["Probability (%)"]],
+                        textposition="outside",
+                    ))
+                    fig_p.update_layout(
+                        height=260, yaxis_title="Probability (%)",
+                        margin=dict(l=10, r=10, t=10, b=10), showlegend=False,
+                    )
+                    st.plotly_chart(fig_p, use_container_width=True)
 
-            else:  # clf
+            elif mode == "clf":
                 proba_arr = predict_single_proba(pipe, input_vals, num_cols, cat_cols)[0]
                 pos_prob  = float(proba_arr[1])
                 neg_prob  = float(proba_arr[0])
@@ -1568,76 +1527,63 @@ def _render_prediction_tab(df: pd.DataFrame):
             st.error(f"Prediction failed: {e}")
 
 
-def _show_regression_results(state: dict):
-    m    = state["metrics"]
-    tkey = m.get("target_key", "profit_margin")
-    tcol = m.get("target_col", "Target")
-
-    if tkey == "profit_margin":
-        mae_fmt   = f"{m['cv_mae_mean']*100:.2f} pp"
-        mae_sub   = "margin points"
-        rmse_fmt  = f"{m['test_rmse']*100:.2f} pp"
-        rmse_sub  = "margin points"
-        y_test_sc = m["y_test"] * 100
-        y_pred_sc = m["y_pred"] * 100
-        hover_t   = "Actual: %{x:.1f}%<br>Predicted: %{y:.1f}%<extra></extra>"
-        x_label   = "Actual margin (%)"
-        y_label   = "Predicted margin (%)"
-    else:  # shipping_days or future numeric targets
-        mae_fmt   = f"{m['cv_mae_mean']:.2f}"
-        mae_sub   = "days"
-        rmse_fmt  = f"{m['test_rmse']:.2f}"
-        rmse_sub  = "days"
-        y_test_sc = m["y_test"]
-        y_pred_sc = m["y_pred"]
-        hover_t   = f"Actual: %{{x:.1f}}<br>Predicted: %{{y:.1f}}<extra></extra>"
-        x_label   = f"Actual {tcol}"
-        y_label   = f"Predicted {tcol}"
+def _show_multiclass_results(state: dict):
+    m       = state["metrics"]
+    classes = m["classes"]
 
     c = st.columns(4)
-    with c[0]: st.markdown(kpi_card("CV R² (mean)", f"{m['cv_r2_mean']:.3f}",
-                                       sub=f"± {m['cv_r2_std']:.3f}", accent=True),
+    with c[0]: st.markdown(kpi_card("CV F1 Macro", f"{m['cv_f1_mean']:.3f}",
+                                       sub=f"± {m['cv_f1_std']:.3f}", accent=True),
                               unsafe_allow_html=True)
-    with c[1]: st.markdown(kpi_card("CV MAE", mae_fmt, sub=mae_sub),
+    with c[1]: st.markdown(kpi_card("CV Accuracy", f"{m['cv_acc_mean']:.3f}"),
                               unsafe_allow_html=True)
-    with c[2]: st.markdown(kpi_card("Test R²", f"{m['test_r2']:.3f}"),
+    with c[2]: st.markdown(kpi_card("Test F1 Macro", f"{m['test_f1']:.3f}"),
                               unsafe_allow_html=True)
-    with c[3]: st.markdown(kpi_card("Test RMSE", rmse_fmt, sub=rmse_sub),
+    with c[3]: st.markdown(kpi_card("Test Accuracy", fmt_pct(m["test_acc"])),
                               unsafe_allow_html=True)
     st.write("")
 
     cl, cr = st.columns(2)
     with cl:
-        section(f"Predicted vs. actual {tcol.lower()}")
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=y_test_sc, y=y_pred_sc, mode="markers",
-            marker=dict(color=LAU_GREEN, size=5, opacity=0.5),
-            hovertemplate=hover_t,
-            name="Order",
+        section("Confusion matrix")
+        cm = m["confusion"]
+        fig = go.Figure(data=go.Heatmap(
+            z=cm,
+            x=[f"Pred: {c}" for c in classes],
+            y=[f"Actual: {c}" for c in classes],
+            text=cm, texttemplate="%{text:,}", textfont=dict(size=13),
+            colorscale=SEQUENTIAL_GREEN, showscale=False,
         ))
-        lo = float(min(y_test_sc.min(), y_pred_sc.min()))
-        hi = float(max(y_test_sc.max(), y_pred_sc.max()))
-        fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines",
-                                   line=dict(color=GRAY_500, width=1, dash="dash"),
-                                   showlegend=False, hoverinfo="skip"))
-        fig.update_layout(height=340, xaxis_title=x_label,
-                            yaxis_title=y_label, showlegend=False)
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
     with cr:
-        section("Top feature importance")
-        fi = feature_importance(state["pipe"], top_n=10)
-        if not fi.empty:
-            fi = fi.sort_values("importance")
-            fig = go.Figure(go.Bar(
-                x=fi["importance"], y=fi["feature"], orientation="h",
-                marker=dict(color=LAU_GREEN_LT),
-            ))
-            fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Feature importance not available for this model.")
+        section("Class distribution in training data")
+        dist = m["class_dist"]
+        fig = go.Figure(go.Bar(
+            x=list(dist.keys()),
+            y=[v * 100 for v in dist.values()],
+            marker=dict(color=[LAU_GREEN, ACCENT_GOLD, GRAY_500][:len(dist)],
+                        line=dict(width=0)),
+            text=[f"{v*100:.1f}%" for v in dist.values()],
+            textposition="outside",
+        ))
+        fig.update_layout(height=320, yaxis_title="Share of orders (%)",
+                           margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+    section("Top features driving tier prediction")
+    fi = feature_importance(state["pipe"], top_n=10)
+    if not fi.empty:
+        fi = fi.sort_values("importance")
+        fig = go.Figure(go.Bar(
+            x=fi["importance"], y=fi["feature"], orientation="h",
+            marker=dict(color=LAU_GREEN_LT),
+        ))
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Feature importance not available for this model.")
 
 
 def _show_classification_results(state: dict):
@@ -1764,6 +1710,14 @@ def _show_segmentation_results(state: dict):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def _show_forecast_results(state: dict):
+    series = state["series"]
+    naive  = state["naive"]
+    sar    = state["sarima"]
+    fitted = state["fitted"]
+    bt     = state["backtest"]
+
+    cur_total = float(series.tail(12).sum())
 def _show_forecast_results(state: dict):
     series = state["series"]
     naive  = state["naive"]
