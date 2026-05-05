@@ -410,7 +410,17 @@ def _render_validation_and_preview():
     section("Data explorer",
             "Sort any column by clicking its header. Use the search box to filter rows. "
             "Resize columns by dragging the column dividers.")
-    st.dataframe(df, use_container_width=True, height=500, hide_index=True)
+    df_explore = render_filters(df, "explorer")
+    row_options = [25, 50, 100, 250, 500, "All"]
+    n_rows = st.selectbox(
+        "Rows to display",
+        options=row_options,
+        index=1,
+        key="explorer_nrows",
+    )
+    display_df = df_explore if n_rows == "All" else df_explore.head(int(n_rows))
+    st.caption(f"Showing {len(display_df):,} of {len(df_explore):,} rows")
+    st.dataframe(display_df, use_container_width=True, height=500, hide_index=True)
 
     if st.session_state.cleaning_log:
         section("Active cleaning operations")
