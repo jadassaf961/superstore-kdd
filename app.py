@@ -410,7 +410,7 @@ def _render_validation_and_preview():
     section("Data explorer",
             "Sort any column by clicking its header. Use the search box to filter rows. "
             "Resize columns by dragging the column dividers.")
-    st.dataframe(df, use_container_width=True, height=500)
+    st.dataframe(df, use_container_width=True, height=500, hide_index=True)
 
     if st.session_state.cleaning_log:
         section("Active cleaning operations")
